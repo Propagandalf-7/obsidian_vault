@@ -57,6 +57,11 @@ Add the following line to the file `/etc/fstab`:
 UUID=YOUR_NTFS_UUID /mnt/external_drive ntfs-3g defaults,uid=nobody,gid=nogroup,umask=000 0 0
 ```
 
+```bash
+umount /mnt/external_drive
+mount /mnt/external_drive
+```
+
 ### Share the drive over the network
 Install SAMBA:
 ```bash
