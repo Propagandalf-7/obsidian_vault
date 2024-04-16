@@ -37,6 +37,11 @@ Create a mount point:
 mkdir /mnt/external_hdd
 ```
 
+```bash
+apt-get update
+apt-get install ntfs-3g
+```
+
 Mount the partition:
 ```bash
 mount -t ntfs /dev/sdb1 /mnt/external_hdd
@@ -46,6 +51,10 @@ Setup auto mount:
 Add the following line to the file `/etc/fstab`:
 ```bash
 /dev/sdb1 /mnt/external_hdd ntfs defaults 0 0
+```
+
+```bash
+UUID=YOUR_NTFS_UUID /mnt/external_drive ntfs-3g defaults,uid=nobody,gid=nogroup,umask=000 0 0
 ```
 
 ### Share the drive over the network
