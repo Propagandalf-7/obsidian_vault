@@ -100,3 +100,14 @@ LCX install:
   bash -c "$(wget -qLO - https://github.com/tteck/Proxmox/raw/main/ct/jellyfin.sh)"
 ```
 
+Add the nas directory created above to the container config in `/etc/pve/lxc/<container-id>.conf`
+```bash
+mp0: /mnt/NAS,mp=/mnt/containerNAS
+```
+Then
+
+```bash
+pct stop <container-id>
+pct start <container-id>
+```
+
