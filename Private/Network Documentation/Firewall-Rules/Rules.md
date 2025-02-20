@@ -1,121 +1,175 @@
+# UniFi Zone-Based Firewall Rules
 
-> **Diagram Notes:**  
-> 1. Dashed or blocked lines indicate restricted or no direct traffic.  
-> 2. Solid arrows to the Internet indicate outbound traffic allowed (usually on ports 80/443).  
-> 3. Access to the Infrastructure VLAN (50) only occurs via VPN (not shown as a line here to emphasize it’s restricted).
-
-(Place an actual image file, e.g. `Firewall-Zone-Diagram.png`, in your `Diagrams/` folder if you prefer a graphical representation. Update references accordingly.)
+This document outlines our zone-based firewall rules for UniFi devices, focusing on **least-privilege access**, **inter-VLAN isolation**, and **secure service exposure**. Below is an updated rules table reflecting corrected zones, selective Guest→IoT access for casting, and a local DNS server for content filtering and internal DNS.
 
 ---
 
-## 3. UniFi Zones and VLAN Mapping
+## 1. Overview
 
-Below are the zones defined in UniFi along with links to their respective documentation:
+We separate the network into VLAN-based “zones,” each with its own security posture:
 
-- **Main Zone (VLAN 10):** [[../VLANS/VLAN-10-main|Main (10)]]
-- **IoT Zone (VLAN 20):** [[../VLANS/VLAN-20-iot|IoT (20)]]
-- **Guest Zone (VLAN 30):** [[../VLANS/VLAN-30-guest|Guest (30)]]
-- **Internal Services Zone (VLAN 40):** [[../VLANS/VLAN-40-internal-services|Internal Services (40)]]
-- **Infrastructure Zone (VLAN 50):** [[../VLANS/VLAN-50-infrastructure|Infrastructure (50)]]
-- **GitLab-CI/CD Zone (VLAN 60):** [[../VLANS/VLAN-60-gitlab-cicd|GitLab-CI/CD (60)]]
-- **Labs Zone (VLAN 70):** [[../VLANS/VLAN-70-labs|Labs (70)]]
-- **Prod Zone (VLAN 80):** [[../VLANS/VLAN-80-prod|Prod (80)]]
+- **Default Deny:** Block all inter-zone traffic unless explicitly allowed.  
+- **VPN-Only Access:** Infrastructure VLAN (management, backups, etc.) is only accessible via VPN.  
+- **Selective Guest→IoT:** Guests can cast to specific IoT devices (e.g., Smart TV), but cannot freely access other IoT resources.  
+- **Local DNS Server:** A dedicated DNS service (e.g., Pi-hole or AdGuard Home) provides content filtering for Main, Guest, and IoT VLANs, as well as custom DNS for internal services.
+
+---
+
+## 2. Network Diagram
+
+```diagram
+   +------------------------+
+   | Main VLAN (10)        |----> Internet
+   | (PCs, Laptops)        |       |
+   +-----------+-----------+       |
+               |                 ...
+   +-----------v-----------+
+   | Guest VLAN (30)       |----> Internet
+   | (Visitors, etc.)      |       ^
+   +-----------+-----------+       |
+               |   (Cast to SmartTV)
+   +-----------v-----------+
+   | IoT VLAN (20)         |----> Internet (Limited Outbound)
+   | (Smart TV, Devices)   |----> Local DNS for content filtering
+   +-----------+-----------+
+               |
+               |   (VPN Only)
+   +-----------v-----------+
+   | Infrastructure (50)   |
+   | (Proxmox, Backups,    |
+   |  K8s control plane,   |
+   |  local DNS server)    |
+   +-----------+-----------+
+               |
+               v
+   +------------------------+
+   | Internal Services (40) |
+   | (e.g., Jellyfin)       |
+   +-----------+------------+
+               |
+               v
+   +------------------------+
+   | GitLab/CI-CD (60)      |
+   | (via Cloudflare Tunnels)
+   +-----------+------------+
+               |
+               v
+   +------------------------+
+   | Labs (70)             |
+   | (Cloudflare Tunnels,  |
+   |  no direct inbound)   |
+   +-----------+------------+
+               |
+               v
+   +------------------------+
+   | Prod (80)             |
+   | (Strict inbound only) |
+   +------------------------+
+```
+Diagram Notes:
+
+- Guest VLAN (30) has restricted access to IoT VLAN (20) only for casting to Smart TV.  
+- Infrastructure VLAN (50) is off-limits except via VPN.  
+- Local DNS server (e.g., Pi-hole/AdGuard) resides in Infrastructure VLAN (50) but services VLANs 10, 20, 30, etc.  
+- GitLab/CI-CD (VLAN 60), Labs (70), and Prod (80) can be exposed via Cloudflare Tunnels or have minimal inbound firewall rules.  
+
+---
+
+## 3. Zone-to-VLAN Mapping
+
+| Zone Name         | VLAN ID | Notes                                                    |
+| ----------------- | ------- | -------------------------------------------------------- |
+| Main              | 10      | Primary user devices (PCs, laptops).                     |
+| IoT               | 20      | Smart TVs, smart home devices.                           |
+| Guest             | 30      | Visitors, captive portal optional.                       |
+| Internal Services | 40      | Local apps like Jellyfin.                                |
+| Infrastructure    | 50      | Management, backups, hypervisors, local DNS, monitoring. |
+| GitLab-CI/CD      | 60      | Self-hosted Git, CI/CD pipelines (via tunnels).          |
+| Labs              | 70      | Testing/staging environment (via tunnels).               |
+| Prod              | 80      | Production workloads with minimal inbound.               |
 
 ---
 
 ## 4. Firewall Rules Table
 
-Below is an example table summarizing the primary rules enforced via our zone-based approach. Additional rules or refinements can be added as needed for specific services.
+Below is a summarized firewall rules table. Adjust ports/services as needed.
 
-| Source Zone / VLAN           | Destination Zone / VLAN               | Allowed Ports / Protocols  | Conditions / Notes                                                                                 |
-|------------------------------|----------------------------------------|----------------------------|-----------------------------------------------------------------------------------------------------|
-| **Main (VLAN 10)**           | **Internet**                          | All outbound (80/443)      | - Default user network. No unsolicited inbound allowed.                                             |
-| **IoT (VLAN 20)**            | **Internet**                          | 80/443 (outbound)          | - Isolated from Main.  <br/> - DNS only to local resolver if required.                              |
-| **Guest (VLAN 30)**          | **Internet**                          | 80/443 (outbound)          | - Captive portal if desired. <br/> - No inter-VLAN access allowed.                                  |
-| **Internal Services (40)**   | **LAN Clients** (e.g., VLAN 10)       | Varies by application      | - Local media servers (e.g., Jellyfin). <br/> - Allowed inbound from local VLANs only.             |
-| **Infrastructure (50)**      | **VPN (UniFi)**                       | SSH (22), HTTPS (443), etc.| - Only accessible via an **authenticated** VPN connection. <br/> - No direct inbound from other VLANs.   |
-| **GitLab-CI/CD (60)**        | **Internet (via Cloudflare Tunnels)** | 80/443                     | - Publicly accessible behind Cloudflare Tunnels. <br/> - Restrict to Cloudflare IP ranges.          |
-| **Labs (70)**                | **Internet (via Cloudflare Tunnels)** | 80/443                     | - Test services can be externally accessible via tunnels only. <br/> - No direct inbound allowed.   |
-| **Prod (80)**                | **Internet**                          | 80/443 (or required ports)  | - Production environment. <br/> - Strict inbound to essential services only.                        |
+| Source VLAN        | Destination VLAN                   | Allowed Ports / Protocols             | Conditions / Notes                                                                                  |
+|--------------------|------------------------------------|---------------------------------------|------------------------------------------------------------------------------------------------------|
+| Main (10)          | Internet                           | 80/443 outbound                       | Standard user internet access. Enforce local DNS if using Pi-hole/AdGuard for content filtering.     |
+| Main (10)          | IoT (20)                           | Optional (e.g., 8009 for Chromecast)  | Allow only if certain Main devices must control or cast to IoT. Otherwise block all.                 |
+| Main (10)          | Infrastructure (50)                | None (blocked)                        | Use VPN to access Infrastructure.                                                                    |
+| IoT (20)           | Local DNS (50)                     | 53 (DNS), possibly DoT/DoH            | Force IoT to use local DNS for content filtering.                                                    |
+| IoT (20)           | Internet                           | 80/443 outbound only                  | Restrict to needed services (firmware updates, app connectivity). No inbound from Internet.          |
+| Guest (30)         | Internet                           | 80/443 outbound                       | Captive portal optional. Force Guest VLAN to local DNS for content filtering if desired.             |
+| Guest (30)         | IoT (20)                           | Ports for casting (mDNS, SSDP, etc.)  | Restricted to specific devices (e.g., Smart TV). Consider using firewall groups or ACLs for fine-tuning. |
+| Guest (30)         | Main (10), Infra (50), etc.        | None (blocked)                        | No direct access unless specifically allowed.                                                        |
+| Infr. (50)         | VPN                                | SSH (22), HTTPS (443), etc.           | Only accessible through UniFi VPN. No direct inbound from other VLANs.                               |
+| Int. Svcs (40)     | LAN Clients (e.g., 10, etc.)       | Varies by app (e.g., Jellyfin: 8096)  | Accessible only on local subnets. No direct inbound from Internet unless reversed-proxied.           |
+| GitLab (60)        | Internet (Cloudflare)              | 80/443                                | Exposed behind Cloudflare Tunnels. Restrict to Cloudflare IP ranges if possible.                      |
+| Labs (70)          | Internet (Cloudflare)              | 80/443                                | No direct inbound. For demo/staging behind Cloudflare Tunnels.                                       |
+| Prod (80)          | Internet                           | 80/443 or required ports              | Strict inbound only for essential services. Block all other traffic.                                 |
 
-### Notes on Specific Rules
+### Rule Explanations
 
-1. **Main (VLAN 10)**
-   - General user devices. Internet access allowed, inbound blocked.
-   - Cross-VLAN communication with IoT or Internal Services only if explicitly permitted.
+- **Local DNS Server**  
+  Typically located in Infrastructure VLAN (50) (e.g., Pi-hole/AdGuard).  
+  VLANs 10 (Main), 20 (IoT), and 30 (Guest) forward DNS queries to this server for content filtering and custom internal DNS.
 
-2. **IoT (VLAN 20)**
-   - Typically consumer IoT devices. Outbound HTTP/HTTPS permitted, inbound from Main or others is blocked unless needed.
-   - DNS might be local (e.g., Pi-hole) or upstream, depending on your config.
+- **Guest → IoT Casting**  
+  Limit to the Smart TV’s IP or relevant casting protocol ports (e.g., 8009 for Chromecast, 7000+ for AirPlay, mDNS on 5353, etc.).  
+  Block all other IoT devices from Guest VLAN to prevent lateral movement.
 
-3. **Guest (VLAN 30)**
-   - Fully isolated from LAN. Captive portal optional.
-   - Only outbound access to the Internet on 80/443.
+- **VPN Access**  
+  All Infrastructure resources require VPN.  
+  No direct route from Main/IoT/Guest to Infrastructure except via VPN.
 
-4. **Internal Services (VLAN 40)**
-   - E.g., Jellyfin, local media, or other internal-only applications.
-   - Firewall rules permit local LAN clients (VLAN 10 or 20) if needed, but block external inbound unless used behind a proxy or tunnel.
+- **Cloudflare Tunnels**  
+  GitLab (60) and Labs (70) are accessible externally through Cloudflare or similar reverse proxy.  
+  Restrict inbound traffic to known Cloudflare IP ranges if possible.
 
-5. **Infrastructure (VLAN 50)**
-   - Houses Proxmox, Kubernetes control plane, backup servers, and monitoring.
-   - **No direct access** except via VPN. Critical to keep this zone highly secure.
-
-6. **GitLab-CI/CD (VLAN 60)**
-   - Publicly accessible Git services through Cloudflare Tunnels or strict inbound firewall rules.
-   - Integrates with Infrastructure for CI/CD but limit that access only to essential ports (e.g., SSH, API tokens, etc.).
-
-7. **Labs (VLAN 70)**
-   - Test environment for pre-production testing.
-   - May also be exposed via Cloudflare Tunnels for demonstration or staging. No direct inbound.
-
-8. **Prod (VLAN 80)**
-   - Production environment for live services.
-   - Minimal inbound rules, typically via standard web ports or specialized ports. No broad open inbound allowed.
+- **Prod (80)**  
+  Public-facing environment with strict, minimal inbound rules (e.g., HTTPS).  
+  No direct inter-VLAN from Guest/IoT to Prod.
 
 ---
 
 ## 5. Additional Considerations
 
-1. **Logging & Monitoring**  
-   - **Enable logging** on all deny/allow rules to help spot suspicious traffic.  
-   - Use a centralized monitoring solution (e.g., Prometheus + Grafana, Wazuh, or Security Onion) to analyze logs.
+- **Logging & Monitoring**  
+  Enable logging on all zone policies to detect unauthorized attempts.  
+  Use centralized monitoring (Prometheus, Grafana, Wazuh, etc.) to track logs and alerts.
 
-2. **Auditing & Vulnerability Scanning**  
-   - Periodically run [Nmap](https://nmap.org/) scans from different VLANs to verify isolation.  
-   - Perform vulnerability scans with [OpenVAS/Greenbone](https://www.greenbone.net/en/community-edition/) to detect outdated services or misconfigurations.
+- **Auditing & Vulnerability Scanning**  
+  Perform routine scans (Nmap, OpenVAS) from each VLAN to confirm isolation.  
+  Integrate code and dependency scans (SonarQube, OWASP Dependency-Check) for self-hosted apps.
 
-3. **VPN Configuration**  
-   - L2TP/IPsec (built into UniFi) secures remote access.  
-   - Only allow management traffic to VLAN 50 (Infrastructure) from authenticated VPN clients.
+- **MAC Filtering**  
+  Not a primary security measure; MAC addresses can be spoofed.  
+  Use only as a supplement (e.g., blocking known rogue devices).
 
-4. **MAC Filtering**  
-   - Not recommended as a primary security measure (MAC addresses can be spoofed).  
-   - Use it only as an additional layer, not a replacement for proper firewall rules.
+- **Documentation & Updates**  
+  Maintain these rules under version control (Git).  
+  Update the Network Diagram and Rules Table whenever a new device/VLAN/policy is introduced.
 
 ---
 
 ## 6. Revision & Maintenance
 
-- **Update Frequency:**  
-  Review this document each time you add or remove a service, change VLAN assignments, or modify the firewall.
-
-- **Change Management:**  
-  Use version control (e.g., Git) for your Obsidian vault to track these rules over time.
-
-- **Review Schedule:**  
-  Perform quarterly rule reviews to confirm that the configuration still meets your security and operational requirements.
+- **Change Management:** Keep a changelog of firewall policies.  
+- **Quarterly Reviews:** Check logs, test connectivity, run scanning tools.  
+- **DNS Updates:** Document custom records for internal services in a separate note or table (e.g., ../DNS/Local-Records.md).
 
 ---
 
 ## 7. References
 
-- **UniFi Official Docs:** [Ubiquiti Help Center](https://help.ui.com/)  
-- **Zone-Based Firewall Concepts:** [UniFi OS Documentation](https://www.ui.com/)  
-- **Cloudflare Tunnels:** [Cloudflare Zero Trust Docs](https://developers.cloudflare.com/cloudflare-one/)  
-- **Nmap:** [https://nmap.org/](https://nmap.org/)  
-- **OpenVAS / Greenbone:** [https://www.greenbone.net/en/community-edition/](https://www.greenbone.net/en/community-edition/)
+- [UniFi Official Docs](https://help.ui.com/)
+- [Cloudflare Tunnels](https://developers.cloudflare.com/cloudflare-one/)
+- [Nmap](https://nmap.org/)
+- [OpenVAS / Greenbone](https://www.greenbone.net/en/community-edition/)
+- [Pi-hole](https://pi-hole.net/)
+- [AdGuard Home](https://github.com/AdguardTeam/AdGuardHome)
 
-For VLAN-specific information, see the individual notes in the `../VLANs/` folder, and for IP addressing details, refer to `../IP-Addressing/Subnet-Plan.md`.
-
-**Last Updated:** 2025-02-20  
-**Maintainer:** _Homelab Admin_
+Last Updated: 2025-02-20  
+Maintainer: Homelab Admin
