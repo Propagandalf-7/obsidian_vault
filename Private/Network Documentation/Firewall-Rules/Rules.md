@@ -94,20 +94,21 @@ Diagram Notes:
 
 Below is a summarized firewall rules table. Adjust ports/services as needed.
 
-| Source VLAN    | Destination VLAN             | Allowed Ports / Protocols            | Conditions / Notes                                                                                       |
-| -------------- | ---------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| Main (10)      | Internet                     | 80/443 outbound                      | Standard user internet access. Enforce local DNS if using Pi-hole/AdGuard for content filtering.         |
-| Main (10)      | IoT (20)                     | Optional (e.g., 8009 for Chromecast) | Allow only if certain Main devices must control or cast to IoT. Otherwise block all.                     |
-| Main (10)      | Infrastructure (50)          | None (blocked)                       | Use VPN to access Infrastructure.                                                                        |
-| IoT (20)       | Local DNS (50)               | 53 (DNS), possibly DoT/DoH           | Force IoT to use local DNS for content filtering.                                                        |
-| IoT (20)       | Internet                     | 80/443 outbound only                 | Restrict to needed services (firmware updates, app connectivity). No inbound from Internet.              |
-| Guest (30)     | Internet                     | 80/443 outbound                      | Captive portal optional. Force Guest VLAN to local DNS for content filtering if desired.                 |
-| Guest (30)     | IoT (20)                     | Ports for casting (mDNS, SSDP, etc.) | Restricted to specific devices (e.g., Smart TV). Consider using firewall groups or ACLs for fine-tuning. |
-| Guest (30)     | Main (10), Infra (50), etc.  | None (blocked)                       | No direct access unless specifically allowed.                                                            |
-| Infr. (50)     | VPN                          | SSH (22), HTTPS (443), etc.          | Only accessible through UniFi VPN. No direct inbound from other VLANs.                                   |
-| Int. Svcs (40) | LAN Clients (e.g., 10, etc.) | Varies by app (e.g., Jellyfin: 8096) | Accessible only on local subnets. No direct inbound from Internet unless reversed-proxied.               |
-| Labs (60)      | Internet (Cloudflare)        | 80/443                               | No direct inbound. For demo/staging behind Cloudflare Tunnels.                                           |
-| Prod (70)      | Internet                     | 80/443 or required ports             | Strict inbound only for essential services. Block all other traffic.                                     |
+| Source VLAN        | Destination VLAN                   | Allowed Ports / Protocols             | Conditions / Notes                                                                                  |
+|--------------------|------------------------------------|---------------------------------------|------------------------------------------------------------------------------------------------------|
+| Main (10)          | Internet                           | 80/443 outbound                       | Standard user internet access. Enforce local DNS if using Pi-hole/AdGuard for content filtering.     |
+| Main (10)          | IoT (20)                           | Optional (e.g., 8009 for Chromecast)  | Allow only if certain Main devices must control or cast to IoT. Otherwise block all.                 |
+| Main (10)          | Infrastructure (50)                | None (blocked)                        | Use VPN to access Infrastructure.                                                                    |
+| IoT (20)           | Local DNS (50)                     | 53 (DNS), possibly DoT/DoH            | Force IoT to use local DNS for content filtering.                                                    |
+| IoT (20)           | Internet                           | 80/443 outbound only                  | Restrict to needed services (firmware updates, app connectivity). No inbound from Internet.          |
+| Guest (30)         | Internet                           | 80/443 outbound                       | Captive portal optional. Force Guest VLAN to local DNS for content filtering if desired.             |
+| Guest (30)         | IoT (20)                           | Ports for casting (mDNS, SSDP, etc.)  | Restricted to specific devices (e.g., Smart TV). Consider using firewall groups or ACLs for fine-tuning. |
+| Guest (30)         | Main (10), Infra (50), etc.        | None (blocked)                        | No direct access unless specifically allowed.                                                        |
+| Infr. (50)         | VPN                                | SSH (22), HTTPS (443), etc.           | Only accessible through UniFi VPN. No direct inbound from other VLANs.                               |
+| Int. Svcs (40)     | LAN Clients (e.g., 10, etc.)       | Varies by app (e.g., Jellyfin: 8096)  | Accessible only on local subnets. No direct inbound from Internet unless reversed-proxied.           |
+| GitLab (60)        | Internet (Cloudflare)              | 80/443                                | Exposed behind Cloudflare Tunnels. Restrict to Cloudflare IP ranges if possible.                      |
+| Labs (70)          | Internet (Cloudflare)              | 80/443                                | No direct inbound. For demo/staging behind Cloudflare Tunnels.                                       |
+| Prod (80)          | Internet                           | 80/443 or required ports              | Strict inbound only for essential services. Block all other traffic.                                 |
 
 ### Rule Explanations
 
@@ -124,10 +125,10 @@ Below is a summarized firewall rules table. Adjust ports/services as needed.
   No direct route from Main/IoT/Guest to Infrastructure except via VPN.
 
 - **Cloudflare Tunnels**  
-  Labs (60) are accessible externally through Cloudflare or similar reverse proxy.  
+  GitLab (60) and Labs (70) are accessible externally through Cloudflare or similar reverse proxy.  
   Restrict inbound traffic to known Cloudflare IP ranges if possible.
 
-- **Prod (70)**  
+- **Prod (80)**  
   Public-facing environment with strict, minimal inbound rules (e.g., HTTPS).  
   No direct inter-VLAN from Guest/IoT to Prod.
 

@@ -1,0 +1,142 @@
+# UniFi Configuration
+## 1.1 Create a VLAN Network in UniFi
+
+    Open UniFi Network (formerly UniFi Controller).
+    Go to Settings → Networks → Create New Network.
+    Name: e.g., Servers-VLAN50
+    Purpose: Typically choose Corporate or VLAN Only (depending on your router setup).
+    VLAN ID: 50
+    Gateway/Subnet: If UniFi is your router, define the subnet (e.g., 10.0.50.0/24). If another device is your router, just set it to VLAN Only and let the router handle IP assignments.
+
+## 1.2 Trunk the Switch Port to Proxmox
+
+    Find the physical port on your UniFi switch that connects to the Proxmox server’s NIC (e.g., enp3s0).
+    Under Devices → [Your Switch] → Ports, select that port and click Configure.
+    Set the Port Profile to a trunk profile that allows VLAN 50 (and any other VLANs you need). Depending on your UniFi version, you can either:
+        Use All VLANs, or
+        Create a custom Trunk profile that includes VLAN 50 and your native VLAN (for example, VLAN 4 if that’s your management VLAN).
+    Apply the changes.
+
+    Note: If your management network is untagged (native VLAN) on that port, you do not assign a VLAN ID to the Proxmox host itself on the switch side. Just ensure VLAN 4 (or 10.0.4.0/24 in your case) is the native (untagged) VLAN and VLAN 50 is tagged.
+
+# Proxmox Configuration
+## 2.1 Network File Overview
+
+Proxmox uses /etc/network/interfaces on Debian-based systems. You can also configure via the Proxmox GUI under Datacenter → Node → System → Network, but many prefer editing the file directly (especially for advanced VLAN setups).
+
+Below is an example file that covers:
+
+    A physical NIC (enp3s0) with no IP assigned (it simply carries traffic).
+    A management bridge (vmbr0) on the untagged (native) VLAN (10.0.4.0/24).
+    A VLAN 50 sub-interface (enp3s0.50) and a corresponding bridge (vmbr50) with no IP assigned to the host.
+
+If you do want your Proxmox host to have an IP on VLAN 50, see the note at the end of this file.
+
+### 2.1.1 Example /etc/network/interfaces
+
+`nano /etc/network/interfaces`
+
+Then paste/edit accordingly:
+
+```bash
+auto lo
+iface lo inet loopback
+
+# -- Physical NIC with no IP (trunking all VLANs) --
+iface enp3s0 inet manual
+
+# -- Management Bridge on 10.0.4.0/24 (untagged / native VLAN) --
+auto vmbr0
+iface vmbr0 inet static
+    address  10.0.4.2/24
+    gateway  10.0.4.1
+    bridge-ports enp3s0
+    bridge-stp off
+    bridge-fd 0
+
+# -- VLAN 50 sub-interface (no IP) --
+auto enp3s0.50
+iface enp3s0.50 inet manual
+    vlan-raw-device enp3s0
+
+# -- Bridge for VLAN 50 (no IP on the host) --
+auto vmbr50
+iface vmbr50 inet manual
+    bridge-ports enp3s0.50
+    bridge-stp off
+    bridge-fd 0
+
+# -- Wireless interface (unused in this example) --
+iface wlo1 inet manual
+```
+
+# -- Source additional config files (if any) --
+`source /etc/network/interfaces.d/*`
+
+### 2.1.2 Apply the Configuration
+
+After editing, save and exit, then run:
+
+`systemctl restart networking`
+
+or reboot the Proxmox server.
+
+    Important: It’s safest to do this from a direct console, iDRAC, IPMI, or iKVM so you don’t accidentally lose remote access if something’s misconfigured.
+
+## 2.2 Explanation of Interfaces
+
+    enp3s0: Physical NIC. Set to manual so it does not get an IP by itself. It will carry all VLAN traffic.
+    vmbr0: Bridge that does have an IP (10.0.4.2/24). This is your Proxmox management interface. It’s assumed to be on the native/untagged VLAN 4 in your environment.
+    enp3s0.50: VLAN 50 sub-interface on the physical NIC. Marked manual—it does not have an IP.
+    vmbr50: Bridge that attaches to enp3s0.50. Also set to manual (no IP) because the Proxmox host itself does not need an IP on VLAN 50. This is purely for passing VLAN 50 traffic to VMs/containers.
+
+## 2.3 Adding an IP on VLAN 50 (Optional)
+
+If the Proxmox host itself needs to communicate on VLAN 50 (for example, to serve files, monitoring, or backups on that VLAN), you can give vmbr50 a static IP:
+
+auto vmbr50
+iface vmbr50 inet static
+    address 10.0.50.2/24
+    # Typically you do NOT set a second default gateway if you already have one on vmbr0
+    bridge-ports enp3s0.50
+    bridge-stp off
+    bridge-fd 0
+
+Just remember that typically you have only one default gateway (on vmbr0). If you need to reach other networks from VLAN 50, add static routes rather than a second default gateway.
+
+# 3. Assigning VLAN 50 to VMs/Containers
+
+    In Proxmox Web UI:
+        Go to Datacenter → [Your Node] → [VM or CT] → Hardware.
+        Add (or edit) a Network Device.
+        Set the Bridge to vmbr50.
+
+    Inside the VM/Container:
+        Configure the network interface with an IP in 10.0.50.x/24 (static or via DHCP).
+        Gateway: 10.0.50.1 (assuming your router or firewall is at .1 on VLAN 50).
+
+Any VM attached to vmbr50 will now be on VLAN 50 at the network level.
+
+# 4. Testing & Verification
+
+    UniFi Clients List: In the UniFi Network application, you should see the VMs show up under the VLAN 50 network after a short time (once they start passing traffic).
+    Ping Tests:
+        From the VM on VLAN 50, ping 10.0.50.1 (the default gateway) or other devices on that VLAN.
+        If the Proxmox host has an IP on VLAN 50, you can test by pinging 10.0.50.2.
+    Routing:
+        Verify that the VLAN 50 network can reach other networks if allowed. This depends on your router/firewall rules.
+
+# 5. Common Pitfalls
+
+    Port Profile on UniFi: Make sure VLAN 50 is actually tagged on the switch port to Proxmox. If it isn’t, no VLAN 50 traffic can pass.
+    Multiple Default Gateways: Only define one default gateway on the Proxmox host. Additional VLANs typically do not need a separate gateway line unless you have advanced routing needs.
+    Bridged Firewall: Proxmox has a built-in firewall feature. If it’s enabled, ensure you allow the traffic you expect.
+    DHCP: If you’re relying on DHCP in VLAN 50, confirm that your router or DHCP server is listening on VLAN 50.
+
+# 6. Summary
+
+    UniFi: Create VLAN 50 as a new network, trunk it to the Proxmox port.
+    Proxmox: Configure a VLAN sub-interface (enp3s0.50) and a bridge (vmbr50). Decide if you want the Proxmox host to have an IP in VLAN 50.
+    VMs: Attach to vmbr50 and configure them for the 10.0.50.x network (static or DHCP).
+
+Once complete, you’ll have isolated VLAN 50 traffic for the VMs that need it, while still keeping your Proxmox management on an untagged VLAN (10.0.4.0/24).
